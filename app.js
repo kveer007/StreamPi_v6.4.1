@@ -1,7 +1,7 @@
 // This page is public, so it holds nothing about any particular Pi. The Pi's address
 // is typed in once per device (and kept only on that device); everything else, like
 // where the live streams are, comes from the Pi after logging in.
-const APP_VERSION = 'v6.4.1';
+const APP_VERSION = 'v6.4.2';
 const FRESH_SECS = 20;            // a level reading older than this counts as "no live sound"
 const AUDIO_RE = /^audio-\d{8}-\d{4}(\d{2})?\.(ogg|m4a)$/;   // .m4a with exact seconds since v4.1
 const CLIP_RE = /^motion-\d{14}\.mp4$/;
@@ -835,20 +835,45 @@ function applyZoom() {
   const mx = (zoom.s - 1) * w / 2, my = (zoom.s - 1) * h / 2;      // don't let the picture's edge come inside
   zoom.x = Math.min(mx, Math.max(-mx, zoom.x));
   zoom.y = Math.min(my, Math.max(-my, zoom.y));
-  // Turned sideways (90 / 270): the box around the video is sized to the card turned round, then
-  // turned to fill it. Zooming moves that box too. The video itself is never resized or turned:
-  // iPhones can freeze the picture of a video that is (while its sound carries on).
-  const b = $('cam-turn'), t = camTurn();
+  // Zooming moves the box around the video. Turned sideways (90 / 270), the picture is drawn turned
+  // onto the canvas over the video instead (see camDrawFrame), and zooming moves the canvas.
+  const t = camTurn(), z = zoom.s === 1 ? '' : 'translate(' + zoom.x + 'px,' + zoom.y + 'px) scale(' + zoom.s + ')';
   card.classList.toggle('turned', !!t);
-  if (t) {
-    b.style.width = h + 'px'; b.style.height = w + 'px';
-    b.style.left = (w - h) / 2 + 'px'; b.style.top = (h - w) / 2 + 'px';
-  } else b.style.width = b.style.height = b.style.left = b.style.top = '';
-  b.style.transform = (zoom.s === 1 ? '' : 'translate(' + zoom.x + 'px,' + zoom.y + 'px) scale(' + zoom.s + ') ') + (t ? 'rotate(' + t + 'deg)' : '');
+  $('cam-turn').style.transform = t ? '' : z;
+  $('cam-canvas').style.transform = t ? z : '';
+  if (t && camLive) startCamDraw();
   card.classList.toggle('zoomed', zoom.s > 1);
   $('zoom-tag').textContent = zoom.s.toFixed(1) + '× · tap for 1×';
 }
 function resetZoom() { zoom.s = 1; zoom.x = 0; zoom.y = 0; applyZoom(); }
+
+// A live picture turned sideways is drawn, turned, onto a canvas laid over the video, about 30 times
+// a second (the camera sends 15 pictures a second). The video underneath stays exactly as it is
+// when not turned: iPhones can freeze the picture of a video that is itself resized or turned (the
+// sound carries on), so nothing turns the video. Stops by itself when live stops or the turn is undone.
+let camDrawing = false, camDrawAt = 0, camDrawTime = -1;
+function startCamDraw() {
+  if (camDrawing) return;
+  camDrawing = true; camDrawTime = -1;
+  requestAnimationFrame(camDrawFrame);
+}
+function camDrawFrame(now) {
+  const t = camTurn();
+  if (!camLive || !t) { camDrawing = false; return; }
+  requestAnimationFrame(camDrawFrame);
+  if (now - camDrawAt < 30) return;
+  const v = $('cam-video'), c = $('cam-canvas'), vw = v.videoWidth, vh = v.videoHeight;
+  if (!vw || !vh || v.readyState < 2) return;
+  const sized = c.width === vh && c.height === vw && c.dataset.turn === String(t);
+  if (sized && v.currentTime === camDrawTime) return;      // nothing new to draw (paused)
+  camDrawAt = now; camDrawTime = v.currentTime;
+  if (!sized) { c.width = vh; c.height = vw; c.dataset.turn = t; }
+  const ctx = c.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.translate(vh / 2, vw / 2);
+  ctx.rotate(t * Math.PI / 180);
+  try { ctx.drawImage(v, -vw / 2, -vh / 2, vw, vh); } catch (e) {}
+}
 // Zoom by `f`, keeping the point (px, py) of the picture under the fingers where it is
 function zoomAt(f, px, py) {
   const s2 = Math.min(5, Math.max(1, zoom.s * f)), k = s2 / zoom.s;

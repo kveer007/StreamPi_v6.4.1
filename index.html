@@ -271,10 +271,15 @@ svg.i.fill { fill: currentColor; stroke: none; }
   margin: 0 auto 8px; position: relative; aspect-ratio: var(--ar, 4 / 3); width: 100%; max-width: calc(58vh * var(--arn, 1.3333));
 }
 .video-card video { width: 100%; height: 100%; display: block; background: #000; object-fit: contain; }
-/* live picture: app.js turns (sideways: sized to the card turned round) and zooms the box around the
-   video, never the video itself - iPhones can freeze the picture of a video that is resized or turned */
+/* live picture: app.js zooms the box around the video. Turned sideways (90 / 270), the picture is
+   drawn turned onto the canvas over it instead, and zooming moves the canvas. The video itself is
+   never resized or turned: iPhones can freeze the picture of a video that is (the sound carries on) */
 .cam-turn { width: 100%; height: 100%; }
-.video-card.turned .cam-turn { position: absolute; }
+.cam-canvas {
+  position: absolute; inset: 0; width: 100%; height: 100%; display: none; object-fit: contain;
+  background: #000; transform-origin: 50% 50%;
+}
+.video-card.turned.playing .cam-canvas { display: block; }
 .video-placeholder {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center;
   padding: 20px; color: var(--text-dim); font-size: 15px; line-height: 1.7; pointer-events: none;
@@ -556,6 +561,7 @@ canvas.thumb { display: block; }
       </div>
       <div class="video-card" id="cam-card">
         <div class="cam-turn" id="cam-turn"><video id="cam-video" playsinline preload="none"></video></div>
+        <canvas class="cam-canvas" id="cam-canvas" aria-hidden="true"></canvas>
         <div class="video-placeholder" id="cam-placeholder">Tap Watch live below</div>
         <div class="video-label" id="cam-label" style="display:none">LIVE</div>
         <button class="zoom-tag" id="zoom-tag" data-click="resetZoom" aria-label="Back to normal size">1×</button>
@@ -811,6 +817,6 @@ canvas.thumb { display: block; }
 
 <div class="toast" id="toast"></div>
 
-<script src="app.js?v=6.4.1"></script>
+<script src="app.js?v=6.4.2"></script>
 </body>
 </html>
