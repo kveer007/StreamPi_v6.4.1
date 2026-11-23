@@ -1,7 +1,7 @@
 // This page is public, so it holds nothing about any particular Pi. The Pi's address
 // is typed in once per device (and kept only on that device); everything else, like
 // where the live streams are, comes from the Pi after logging in.
-const APP_VERSION = 'v6.4.3';
+const APP_VERSION = 'v6.4.4';
 const FRESH_SECS = 20;            // a level reading older than this counts as "no live sound"
 const AUDIO_RE = /^audio-\d{8}-\d{4}(\d{2})?\.(ogg|m4a)$/;   // .m4a with exact seconds since v4.1
 const CLIP_RE = /^motion-\d{14}\.mp4$/;
@@ -78,7 +78,7 @@ function iconEl(tag, cls, icon) { const e = el(tag, cls); e.innerHTML = svg(icon
 
 // The small "i" buttons: one plain explanation each
 const HELP = {
-  live: ['Live camera', 'The picture is about 2 seconds behind real time (about 4 on an iPhone, which needs a little more room to play smoothly).\n\nIf the picture ever stops while the sound goes on, this page notices and gets it moving again by itself within a few seconds.\n\nPinch it to zoom in (on a computer: scroll), then drag to look around. Double-tap to zoom in or back out.\n\nThe camera button saves a photo of the picture to this phone. Full screen fills the whole screen; turn the phone sideways for a bigger picture.\n\nThe picture\'s size and which way up it is are set in Settings, Camera picture.'],
+  live: ['Live camera', 'The picture is about 2 seconds behind real time (about 5 on an iPhone, which needs more room to play smoothly).\n\nIf the picture ever stops while the sound goes on, this page notices and gets it moving again by itself within a few seconds.\n\nPinch it to zoom in (on a computer: scroll), then drag to look around. Double-tap to zoom in or back out.\n\nThe camera button saves a photo of the picture to this phone. Full screen fills the whole screen; turn the phone sideways for a bigger picture.\n\nThe picture\'s size and which way up it is are set in Settings, Camera picture.'],
   picture: ['Camera picture', 'Picture size: how many dots (pixels) the camera sends. Bigger shows more detail, but clips take more space on the card and live view needs a better connection. Every size shows the camera\'s whole view, except 1920 × 1080, which is cut from the middle.\n\nTurn the picture: for a camera that hangs sideways or upside down. 180° and Mirror are done by the camera itself. 90° and 270° are done by this page for live view, and new clips are marked to play turned (phones and computers follow that, also after downloading).\n\nIt is used for live view, new clips, thumbnails, photos and Saved. Clips recorded before a change keep their old way.\n\nChanging it restarts the camera: about 5 seconds without picture.'],
   timeline: ['Movement on this day', 'Each mark is one motion clip, placed at the time of day it started (00 = midnight, 12 = noon, the right end = midnight again). A thin line marks every hour; the numbers below are every 2 hours.\n\nBlue = new, not watched yet. Red = still recording. White = playing now.\n\nTap near a mark to play that clip. Play all plays the whole day, oldest first.'],
   keep: ['Keep this day', "A kept day is never auto-deleted: its sound recordings, sound levels and camera clips stay until you un-keep it.\n\nUn-keeping needs your web password."],
@@ -546,9 +546,10 @@ function attachHls(media, url, onFail, lowLatency) {
     }, lowLatency
       // Camera: tiny 0.27-s pieces, start 1.5 s behind the newest picture; more than 6 s behind
       // (e.g. after the page was in the background) -> jump straight back to now.
-      // iPhones (v6.4.3): whole 2-s pieces, 3.5 s behind (more than 10 s -> back to now). Their
-      // streaming engine froze the picture now and then with the tiny pieces (the sound carried on).
-      ? (isIOS() ? { lowLatencyMode: false, liveSyncDuration: 3.5, liveMaxLatencyDuration: 10, maxBufferLength: 10 }
+      // iPhones: whole 2-s pieces, 5 s behind (more than 12 s -> back to now). Their streaming
+      // engine froze the picture now and then with the tiny pieces (the sound carried on) - v6.4.3;
+      // 3.5 s behind still ran short now and then (short pauses, also unturned) - v6.4.4.
+      ? (isIOS() ? { lowLatencyMode: false, liveSyncDuration: 5, liveMaxLatencyDuration: 12, maxBufferLength: 12 }
                  : { lowLatencyMode: true, liveSyncDuration: 1.5, liveMaxLatencyDuration: 6 })
       // Sound: whole 2-s pieces. Low-latency mode stuttered with the sound-only stream (tiny gaps
       // in the first half-minute that each added delay); this plays smoothly about 3 s behind.
@@ -749,6 +750,9 @@ function initCamLive() {
   initCamZoom();
   // Fit: the box follows the picture's shape once the stream says how big it is
   $('cam-video').addEventListener('loadedmetadata', fitCamCard);
+  // For the test counter in Settings: live ran out of picture and sound for a moment
+  $('cam-video').addEventListener('playing', () => { if (camLive) camPlayed = true; });
+  $('cam-video').addEventListener('waiting', () => { if (camLive && camPlayed) { camFixes.waits++; showTurnWay(); } });
   $('cam-video').addEventListener('resize', fitCamCard);
   const exitIfLeft = () => { if (camFs && !(document.fullscreenElement || document.webkitFullscreenElement)) exitFullScreen(); };
   document.addEventListener('fullscreenchange', exitIfLeft);
@@ -962,7 +966,8 @@ function initCamZoom() {
 // live view is restarted. Only armed once the count has been seen going up (a phone that doesn't
 // count would otherwise look frozen all the time). Counts for this visit are shown in Settings.
 let camWatch = null;
-const camFixes = { skips: 0, restarts: 0 };
+const camFixes = { skips: 0, restarts: 0, stops: 0, waits: 0 };
+let camPlayed = false;                   // live has played (a "waiting" after that = it ran short)
 function startCamWatch() {
   stopCamWatch();
   const v = $('cam-video');
@@ -974,6 +979,7 @@ function startCamWatch() {
     if (frames >= 0 && f > frames) armed = true;
     still = armed && frames >= 0 && f === frames && tm > time + 0.1 ? still + 1 : 0;
     frames = f; time = tm;
+    if (still === 1) { camFixes.stops++; showTurnWay(); }  // counted once per stop (Settings, test)
     if (still < 3) return;                                // 1.5 s without a new picture
     still = 0;
     if (Date.now() - skippedAt < 8000) {                  // the skip didn't hold: start live again
@@ -1003,7 +1009,7 @@ function camNote(text) {
   camNoteTimer = setTimeout(() => n.classList.remove('show'), 2500);
 }
 function stopCamLive() {
-  stopCamWatch();
+  stopCamWatch(); camPlayed = false;
   if (camHls) { try { camHls.destroy(); } catch (e) {} camHls = null; }
   const v = $('cam-video');
   v.pause(); v.removeAttribute('src'); v.load();
@@ -2138,9 +2144,10 @@ function setTurnWay(way) {
 }
 function showTurnWay() {
   document.querySelectorAll('#turn-way button').forEach(b => b.classList.toggle('active', b.dataset.way === turnWay));
-  const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
-  $('turn-way-count').textContent = 'Since this page was opened: ' + plural(camFixes.skips, 'pick-up') + ', ' +
-    plural(camFixes.restarts, 'restart') + ' of a stopped picture.';
+  const times = n => n + (n === 1 ? ' time' : ' times');
+  $('turn-way-count').textContent = 'Since this page was opened: live ran short ' + times(camFixes.waits) +
+    ' · picture stuck briefly ' + times(camFixes.stops) + ' · picked up ' + times(camFixes.skips) +
+    ' · restarted ' + times(camFixes.restarts) + '.';
 }
 function camTurn() { return PIC && (PIC.turn === 90 || PIC.turn === 270) ? PIC.turn : 0; }
 function validPicture(p) {
