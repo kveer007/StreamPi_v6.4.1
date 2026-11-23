@@ -189,7 +189,6 @@ svg.i.fill { fill: currentColor; stroke: none; }
 .h-val { font-family: 'Space Mono', monospace; font-size: 14px; font-weight: 700; white-space: nowrap; }
 .seg3, .seg4 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); height: 50px; border-radius: 14px; border: 1px solid var(--surface3); overflow: hidden; }
 .seg4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.seg3.seg2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .seg3 button, .seg4 button { border: none; background: var(--surface); color: var(--text); font-size: 15px; cursor: pointer; font-family: inherit; }
 .seg3 button + button, .seg4 button + button { border-left: 1px solid var(--surface3); }
 .seg3 button.active, .seg4 button.active { background: var(--accent); color: #0d1a1f; font-weight: 700; }
@@ -272,15 +271,8 @@ svg.i.fill { fill: currentColor; stroke: none; }
   margin: 0 auto 8px; position: relative; aspect-ratio: var(--ar, 4 / 3); width: 100%; max-width: calc(58vh * var(--arn, 1.3333));
 }
 .video-card video { width: 100%; height: 100%; display: block; background: #000; object-fit: contain; }
-/* live picture: app.js zooms the box around the video. Turned sideways (90 / 270), the picture is
-   drawn turned onto the canvas over it instead, and zooming moves the canvas. The video itself is
-   never resized or turned: iPhones can freeze the picture of a video that is (the sound carries on) */
+/* live picture: app.js zooms (and, for 90 / 270, sizes and turns) the box around the video */
 .cam-turn { width: 100%; height: 100%; }
-.cam-canvas {
-  position: absolute; inset: 0; width: 100%; height: 100%; display: none; object-fit: contain;
-  background: #000; transform-origin: 50% 50%;
-}
-.video-card.turned-draw.playing .cam-canvas { display: block; }
 /* "Picture stopped · picking it up again" (app.js startCamWatch) */
 .cam-note {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 3; pointer-events: none;
@@ -569,7 +561,6 @@ canvas.thumb { display: block; }
       </div>
       <div class="video-card" id="cam-card">
         <div class="cam-turn" id="cam-turn"><video id="cam-video" playsinline preload="none"></video></div>
-        <canvas class="cam-canvas" id="cam-canvas" aria-hidden="true"></canvas>
         <div class="video-placeholder" id="cam-placeholder">Tap Watch live below</div>
         <div class="video-label" id="cam-label" style="display:none">LIVE</div>
         <button class="zoom-tag" id="zoom-tag" data-click="resetZoom" aria-label="Back to normal size">1×</button>
@@ -780,12 +771,6 @@ canvas.thumb { display: block; }
         </div>
         <label class="check-row" style="margin-top:12px"><input type="checkbox" id="pic-mirror"> Mirror (flip left and right)</label>
         <div class="note">Used for live view, new clips, thumbnails, photos and Saved. Clips recorded before keep their old way. Changing it restarts the camera: about 5 s without picture.</div>
-        <div class="pic-label next">Sideways live view on this phone (test)</div>
-        <div class="seg3 seg2" id="turn-way">
-          <button data-way="A">A · drawn</button><button data-way="B">B · turned box</button>
-        </div>
-        <div class="note">Two ways of showing a picture turned 90° or 270°, to find the one your iPhone plays smoothly. Try each for a few minutes. Only this phone changes; the camera doesn't restart.</div>
-        <div class="note" id="turn-way-count"></div>
       </div>
     </div>
 
@@ -832,6 +817,6 @@ canvas.thumb { display: block; }
 
 <div class="toast" id="toast"></div>
 
-<script src="app.js?v=6.4.4"></script>
+<script src="app.js?v=6.4.5"></script>
 </body>
 </html>

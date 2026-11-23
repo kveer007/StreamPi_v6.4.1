@@ -1,7 +1,7 @@
 // This page is public, so it holds nothing about any particular Pi. The Pi's address
 // is typed in once per device (and kept only on that device); everything else, like
 // where the live streams are, comes from the Pi after logging in.
-const APP_VERSION = 'v6.4.4';
+const APP_VERSION = 'v6.4.5';
 const FRESH_SECS = 20;            // a level reading older than this counts as "no live sound"
 const AUDIO_RE = /^audio-\d{8}-\d{4}(\d{2})?\.(ogg|m4a)$/;   // .m4a with exact seconds since v4.1
 const CLIP_RE = /^motion-\d{14}\.mp4$/;
@@ -728,9 +728,7 @@ function toggleStream() {
 
 // ── CAMERA · LIVE ─────────────────────────────────────
 let camHls = null, camLive = false;
-// Sideways live view on this phone (a test, Settings -> Camera picture): A = drawn turned on a
-// canvas over the video, B = the box around the video turned
-let turnWay = storageGet('streampi_turn_way') === 'B' ? 'B' : 'A';
+try { localStorage.removeItem('streampi_turn_way'); } catch (e) {}   // the v6.4.3-4 test switch
 const CAM_ERR = "Live camera isn't available. Is Camera mode on, on the Pi?";
 function setCamLiveView() {
   fitCamCard();
@@ -750,9 +748,6 @@ function initCamLive() {
   initCamZoom();
   // Fit: the box follows the picture's shape once the stream says how big it is
   $('cam-video').addEventListener('loadedmetadata', fitCamCard);
-  // For the test counter in Settings: live ran out of picture and sound for a moment
-  $('cam-video').addEventListener('playing', () => { if (camLive) camPlayed = true; });
-  $('cam-video').addEventListener('waiting', () => { if (camLive && camPlayed) { camFixes.waits++; showTurnWay(); } });
   $('cam-video').addEventListener('resize', fitCamCard);
   const exitIfLeft = () => { if (camFs && !(document.fullscreenElement || document.webkitFullscreenElement)) exitFullScreen(); };
   document.addEventListener('fullscreenchange', exitIfLeft);
@@ -849,58 +844,27 @@ function applyZoom() {
   const mx = (zoom.s - 1) * w / 2, my = (zoom.s - 1) * h / 2;      // don't let the picture's edge come inside
   zoom.x = Math.min(mx, Math.max(-mx, zoom.x));
   zoom.y = Math.min(my, Math.max(-my, zoom.y));
-  // Zooming moves the box around the video. Turned sideways (90 / 270) there are two ways (a test,
-  // Settings -> Camera picture): A = the picture is drawn turned onto the canvas over the video (see
-  // camDrawFrame) and zooming moves the canvas; B = the box is sized the other way round and turned
-  // by 89.99 / 269.99 degrees (not exactly 90: said to dodge an iPhone shortcut that can freeze it).
-  const t = camTurn(), draw = !!t && turnWay === 'A', turnBox = !!t && turnWay === 'B',
-        z = zoom.s === 1 ? '' : 'translate(' + zoom.x + 'px,' + zoom.y + 'px) scale(' + zoom.s + ')';
+  // Zooming moves the box around the video. Turned sideways (90 / 270), the box is sized the other
+  // way round and turned by 89.99 / 269.99 degrees (not exactly 90: said to dodge an iPhone shortcut
+  // that can freeze the picture). Chosen in Nov 2026 after testing on the owner's iPhone, together
+  // with the steadier iPhone live settings in attachHls (those fixed the freezes).
+  const t = camTurn(), z = zoom.s === 1 ? '' : 'translate(' + zoom.x + 'px,' + zoom.y + 'px) scale(' + zoom.s + ')';
   card.classList.toggle('turned', !!t);
-  card.classList.toggle('turned-draw', draw);
   const box = $('cam-turn');
-  if (turnBox) {
+  if (t) {
     box.style.position = 'absolute';
     box.style.width = h + 'px'; box.style.height = w + 'px';
     box.style.left = (w - h) / 2 + 'px'; box.style.top = (h - w) / 2 + 'px';
     box.style.transform = (z ? z + ' ' : '') + 'rotate(' + (t - 0.01) + 'deg)';
   } else {
     box.style.position = box.style.width = box.style.height = box.style.left = box.style.top = '';
-    box.style.transform = draw ? '' : z;
+    box.style.transform = z;
   }
-  $('cam-canvas').style.transform = draw ? z : '';
-  if (draw && camLive) startCamDraw();
   card.classList.toggle('zoomed', zoom.s > 1);
   $('zoom-tag').textContent = zoom.s.toFixed(1) + '× · tap for 1×';
 }
 function resetZoom() { zoom.s = 1; zoom.x = 0; zoom.y = 0; applyZoom(); }
 
-// A live picture turned sideways is drawn, turned, onto a canvas laid over the video, about 30 times
-// a second (the camera sends 15 pictures a second). The video underneath stays exactly as it is
-// when not turned: iPhones can freeze the picture of a video that is itself resized or turned (the
-// sound carries on), so nothing turns the video. Stops by itself when live stops or the turn is undone.
-let camDrawing = false, camDrawAt = 0, camDrawTime = -1;
-function startCamDraw() {
-  if (camDrawing) return;
-  camDrawing = true; camDrawTime = -1;
-  requestAnimationFrame(camDrawFrame);
-}
-function camDrawFrame(now) {
-  const t = camTurn();
-  if (!camLive || !t || turnWay !== 'A') { camDrawing = false; return; }
-  requestAnimationFrame(camDrawFrame);
-  if (now - camDrawAt < 30) return;
-  const v = $('cam-video'), c = $('cam-canvas'), vw = v.videoWidth, vh = v.videoHeight;
-  if (!vw || !vh || v.readyState < 2) return;
-  const sized = c.width === vh && c.height === vw && c.dataset.turn === String(t);
-  if (sized && v.currentTime === camDrawTime) return;      // nothing new to draw (paused)
-  camDrawAt = now; camDrawTime = v.currentTime;
-  if (!sized) { c.width = vh; c.height = vw; c.dataset.turn = t; }
-  const ctx = c.getContext('2d');
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.translate(vh / 2, vw / 2);
-  ctx.rotate(t * Math.PI / 180);
-  try { ctx.drawImage(v, -vw / 2, -vh / 2, vw, vh); } catch (e) {}
-}
 // Zoom by `f`, keeping the point (px, py) of the picture under the fingers where it is
 function zoomAt(f, px, py) {
   const s2 = Math.min(5, Math.max(1, zoom.s * f)), k = s2 / zoom.s;
@@ -964,10 +928,8 @@ function initCamZoom() {
 // pictures shown stops going up while the play position moves on. First a tiny skip forward (the
 // picture comes back at the next full picture, about 1 s later); if it stops again within 8 s,
 // live view is restarted. Only armed once the count has been seen going up (a phone that doesn't
-// count would otherwise look frozen all the time). Counts for this visit are shown in Settings.
+// count would otherwise look frozen all the time).
 let camWatch = null;
-const camFixes = { skips: 0, restarts: 0, stops: 0, waits: 0 };
-let camPlayed = false;                   // live has played (a "waiting" after that = it ran short)
 function startCamWatch() {
   stopCamWatch();
   const v = $('cam-video');
@@ -979,16 +941,15 @@ function startCamWatch() {
     if (frames >= 0 && f > frames) armed = true;
     still = armed && frames >= 0 && f === frames && tm > time + 0.1 ? still + 1 : 0;
     frames = f; time = tm;
-    if (still === 1) { camFixes.stops++; showTurnWay(); }  // counted once per stop (Settings, test)
     if (still < 3) return;                                // 1.5 s without a new picture
     still = 0;
     if (Date.now() - skippedAt < 8000) {                  // the skip didn't hold: start live again
-      camFixes.restarts++; showTurnWay(); camNote('Picture stopped · restarting live');
+      camNote('Picture stopped · restarting live');
       restartCamLive();
       return;
     }
     skippedAt = Date.now();
-    camFixes.skips++; showTurnWay(); camNote('Picture stopped · picking it up again');
+    camNote('Picture stopped · picking it up again');
     const edge = camHls && camHls.liveSyncPosition;
     try { v.currentTime = edge && edge - tm > 0.3 ? edge : tm + 0.05; } catch (e) {}
   }, 500);
@@ -1009,7 +970,7 @@ function camNote(text) {
   camNoteTimer = setTimeout(() => n.classList.remove('show'), 2500);
 }
 function stopCamLive() {
-  stopCamWatch(); camPlayed = false;
+  stopCamWatch();
   if (camHls) { try { camHls.destroy(); } catch (e) {} camHls = null; }
   const v = $('cam-video');
   v.pause(); v.removeAttribute('src'); v.load();
@@ -2136,19 +2097,6 @@ const PIC_SIZES = [
 ];
 const PIC_TURNS = [0, 90, 180, 270];
 let PIC = null, picBusy = false;                // PIC: the Pi's setting (null = a Pi without it)
-function setTurnWay(way) {
-  if (way === turnWay) return;
-  turnWay = way; storageSet('streampi_turn_way', way);
-  applyZoom(); showTurnWay();
-  toast('Sideways live view: way ' + way + (camTurn() ? '.' : '. It shows when the picture is turned 90° or 270°.'));
-}
-function showTurnWay() {
-  document.querySelectorAll('#turn-way button').forEach(b => b.classList.toggle('active', b.dataset.way === turnWay));
-  const times = n => n + (n === 1 ? ' time' : ' times');
-  $('turn-way-count').textContent = 'Since this page was opened: live ran short ' + times(camFixes.waits) +
-    ' · picture stuck briefly ' + times(camFixes.stops) + ' · picked up ' + times(camFixes.skips) +
-    ' · restarted ' + times(camFixes.restarts) + '.';
-}
 function camTurn() { return PIC && (PIC.turn === 90 || PIC.turn === 270) ? PIC.turn : 0; }
 function validPicture(p) {
   return p && PIC_SIZES.some(z => z[0] === p.width && z[1] === p.height) && PIC_TURNS.indexOf(p.turn) >= 0
@@ -2175,9 +2123,7 @@ function showPicture() {
     $('pic-size-btn').onclick = () => openPicSizes(!box.classList.contains('open'));
     document.querySelectorAll('#pic-turn button').forEach(b => { b.onclick = () => changePicture({ turn: +b.dataset.turn }); });
     $('pic-mirror').addEventListener('change', e => changePicture({ mirror: e.target.checked }));
-    document.querySelectorAll('#turn-way button').forEach(b => { b.onclick = () => setTurnWay(b.dataset.way); });
   }
-  showTurnWay();
   box.querySelectorAll('.pic-opt').forEach(b => {
     b.classList.toggle('active', +b.dataset.w === PIC.width && +b.dataset.h === PIC.height); b.disabled = picBusy;
   });
