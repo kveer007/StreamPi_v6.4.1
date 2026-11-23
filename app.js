@@ -1,7 +1,7 @@
 // This page is public, so it holds nothing about any particular Pi. The Pi's address
 // is typed in once per device (and kept only on that device); everything else, like
 // where the live streams are, comes from the Pi after logging in.
-const APP_VERSION = 'v6.4.2';
+const APP_VERSION = 'v6.4.3';
 const FRESH_SECS = 20;            // a level reading older than this counts as "no live sound"
 const AUDIO_RE = /^audio-\d{8}-\d{4}(\d{2})?\.(ogg|m4a)$/;   // .m4a with exact seconds since v4.1
 const CLIP_RE = /^motion-\d{14}\.mp4$/;
@@ -78,7 +78,7 @@ function iconEl(tag, cls, icon) { const e = el(tag, cls); e.innerHTML = svg(icon
 
 // The small "i" buttons: one plain explanation each
 const HELP = {
-  live: ['Live camera', 'The picture is about 2 seconds behind real time.\n\nPinch it to zoom in (on a computer: scroll), then drag to look around. Double-tap to zoom in or back out.\n\nThe camera button saves a photo of the picture to this phone. Full screen fills the whole screen; turn the phone sideways for a bigger picture.\n\nThe picture\'s size and which way up it is are set in Settings, Camera picture.'],
+  live: ['Live camera', 'The picture is about 2 seconds behind real time (about 4 on an iPhone, which needs a little more room to play smoothly).\n\nIf the picture ever stops while the sound goes on, this page notices and gets it moving again by itself within a few seconds.\n\nPinch it to zoom in (on a computer: scroll), then drag to look around. Double-tap to zoom in or back out.\n\nThe camera button saves a photo of the picture to this phone. Full screen fills the whole screen; turn the phone sideways for a bigger picture.\n\nThe picture\'s size and which way up it is are set in Settings, Camera picture.'],
   picture: ['Camera picture', 'Picture size: how many dots (pixels) the camera sends. Bigger shows more detail, but clips take more space on the card and live view needs a better connection. Every size shows the camera\'s whole view, except 1920 × 1080, which is cut from the middle.\n\nTurn the picture: for a camera that hangs sideways or upside down. 180° and Mirror are done by the camera itself. 90° and 270° are done by this page for live view, and new clips are marked to play turned (phones and computers follow that, also after downloading).\n\nIt is used for live view, new clips, thumbnails, photos and Saved. Clips recorded before a change keep their old way.\n\nChanging it restarts the camera: about 5 seconds without picture.'],
   timeline: ['Movement on this day', 'Each mark is one motion clip, placed at the time of day it started (00 = midnight, 12 = noon, the right end = midnight again). A thin line marks every hour; the numbers below are every 2 hours.\n\nBlue = new, not watched yet. Red = still recording. White = playing now.\n\nTap near a mark to play that clip. Play all plays the whole day, oldest first.'],
   keep: ['Keep this day', "A kept day is never auto-deleted: its sound recordings, sound levels and camera clips stay until you un-keep it.\n\nUn-keeping needs your web password."],
@@ -532,6 +532,10 @@ function stopAllPlayback(except) {
 
 // Live streams check the stream key from the login on every request.
 // Uses hls.js where possible (it can send the key; that includes iPhones on iOS 17.1+).
+// iPhones and iPads (an iPad says it is a Mac, but has a touch screen)
+function isIOS() {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
 function attachHls(media, url, onFail, lowLatency) {
   const user = AUTH ? AUTH.streamUser : '', key = AUTH ? AUTH.streamKey : '';
   if (!url) { onFail(0); return null; }
@@ -542,7 +546,10 @@ function attachHls(media, url, onFail, lowLatency) {
     }, lowLatency
       // Camera: tiny 0.27-s pieces, start 1.5 s behind the newest picture; more than 6 s behind
       // (e.g. after the page was in the background) -> jump straight back to now.
-      ? { lowLatencyMode: true, liveSyncDuration: 1.5, liveMaxLatencyDuration: 6 }
+      // iPhones (v6.4.3): whole 2-s pieces, 3.5 s behind (more than 10 s -> back to now). Their
+      // streaming engine froze the picture now and then with the tiny pieces (the sound carried on).
+      ? (isIOS() ? { lowLatencyMode: false, liveSyncDuration: 3.5, liveMaxLatencyDuration: 10, maxBufferLength: 10 }
+                 : { lowLatencyMode: true, liveSyncDuration: 1.5, liveMaxLatencyDuration: 6 })
       // Sound: whole 2-s pieces. Low-latency mode stuttered with the sound-only stream (tiny gaps
       // in the first half-minute that each added delay); this plays smoothly about 3 s behind.
       // More than 8 s behind -> jump straight back to now.
@@ -720,6 +727,9 @@ function toggleStream() {
 
 // ── CAMERA · LIVE ─────────────────────────────────────
 let camHls = null, camLive = false;
+// Sideways live view on this phone (a test, Settings -> Camera picture): A = drawn turned on a
+// canvas over the video, B = the box around the video turned
+let turnWay = storageGet('streampi_turn_way') === 'B' ? 'B' : 'A';
 const CAM_ERR = "Live camera isn't available. Is Camera mode on, on the Pi?";
 function setCamLiveView() {
   fitCamCard();
@@ -835,13 +845,26 @@ function applyZoom() {
   const mx = (zoom.s - 1) * w / 2, my = (zoom.s - 1) * h / 2;      // don't let the picture's edge come inside
   zoom.x = Math.min(mx, Math.max(-mx, zoom.x));
   zoom.y = Math.min(my, Math.max(-my, zoom.y));
-  // Zooming moves the box around the video. Turned sideways (90 / 270), the picture is drawn turned
-  // onto the canvas over the video instead (see camDrawFrame), and zooming moves the canvas.
-  const t = camTurn(), z = zoom.s === 1 ? '' : 'translate(' + zoom.x + 'px,' + zoom.y + 'px) scale(' + zoom.s + ')';
+  // Zooming moves the box around the video. Turned sideways (90 / 270) there are two ways (a test,
+  // Settings -> Camera picture): A = the picture is drawn turned onto the canvas over the video (see
+  // camDrawFrame) and zooming moves the canvas; B = the box is sized the other way round and turned
+  // by 89.99 / 269.99 degrees (not exactly 90: said to dodge an iPhone shortcut that can freeze it).
+  const t = camTurn(), draw = !!t && turnWay === 'A', turnBox = !!t && turnWay === 'B',
+        z = zoom.s === 1 ? '' : 'translate(' + zoom.x + 'px,' + zoom.y + 'px) scale(' + zoom.s + ')';
   card.classList.toggle('turned', !!t);
-  $('cam-turn').style.transform = t ? '' : z;
-  $('cam-canvas').style.transform = t ? z : '';
-  if (t && camLive) startCamDraw();
+  card.classList.toggle('turned-draw', draw);
+  const box = $('cam-turn');
+  if (turnBox) {
+    box.style.position = 'absolute';
+    box.style.width = h + 'px'; box.style.height = w + 'px';
+    box.style.left = (w - h) / 2 + 'px'; box.style.top = (h - w) / 2 + 'px';
+    box.style.transform = (z ? z + ' ' : '') + 'rotate(' + (t - 0.01) + 'deg)';
+  } else {
+    box.style.position = box.style.width = box.style.height = box.style.left = box.style.top = '';
+    box.style.transform = draw ? '' : z;
+  }
+  $('cam-canvas').style.transform = draw ? z : '';
+  if (draw && camLive) startCamDraw();
   card.classList.toggle('zoomed', zoom.s > 1);
   $('zoom-tag').textContent = zoom.s.toFixed(1) + '× · tap for 1×';
 }
@@ -859,7 +882,7 @@ function startCamDraw() {
 }
 function camDrawFrame(now) {
   const t = camTurn();
-  if (!camLive || !t) { camDrawing = false; return; }
+  if (!camLive || !t || turnWay !== 'A') { camDrawing = false; return; }
   requestAnimationFrame(camDrawFrame);
   if (now - camDrawAt < 30) return;
   const v = $('cam-video'), c = $('cam-canvas'), vw = v.videoWidth, vh = v.videoHeight;
@@ -933,7 +956,54 @@ function initCamZoom() {
     zoomAt(Math.exp(-e.deltaY * 0.0015), p[0], p[1]);
   }, { passive: false });
 }
+// The picture stopped while the sound goes on (iPhones do this now and then): the phone's count of
+// pictures shown stops going up while the play position moves on. First a tiny skip forward (the
+// picture comes back at the next full picture, about 1 s later); if it stops again within 8 s,
+// live view is restarted. Only armed once the count has been seen going up (a phone that doesn't
+// count would otherwise look frozen all the time). Counts for this visit are shown in Settings.
+let camWatch = null;
+const camFixes = { skips: 0, restarts: 0 };
+function startCamWatch() {
+  stopCamWatch();
+  const v = $('cam-video');
+  if (!v.getVideoPlaybackQuality) return;
+  let frames = -1, time = -1, still = 0, armed = false, skippedAt = 0;
+  camWatch = setInterval(() => {
+    if (!camLive || document.hidden || v.paused || v.readyState < 3) { frames = -1; still = 0; return; }
+    const f = v.getVideoPlaybackQuality().totalVideoFrames, tm = v.currentTime;
+    if (frames >= 0 && f > frames) armed = true;
+    still = armed && frames >= 0 && f === frames && tm > time + 0.1 ? still + 1 : 0;
+    frames = f; time = tm;
+    if (still < 3) return;                                // 1.5 s without a new picture
+    still = 0;
+    if (Date.now() - skippedAt < 8000) {                  // the skip didn't hold: start live again
+      camFixes.restarts++; showTurnWay(); camNote('Picture stopped · restarting live');
+      restartCamLive();
+      return;
+    }
+    skippedAt = Date.now();
+    camFixes.skips++; showTurnWay(); camNote('Picture stopped · picking it up again');
+    const edge = camHls && camHls.liveSyncPosition;
+    try { v.currentTime = edge && edge - tm > 0.3 ? edge : tm + 0.05; } catch (e) {}
+  }, 500);
+}
+function stopCamWatch() { if (camWatch) { clearInterval(camWatch); camWatch = null; } }
+function restartCamLive() {
+  if (!camLive) return;
+  const fs = camFs;                     // stay in full screen
+  stopCamLive();
+  toggleCamLive();
+  if (fs && camLive) enterFullScreen();
+}
+let camNoteTimer = null;
+function camNote(text) {
+  const n = $('cam-note');
+  n.textContent = text; n.classList.add('show');
+  clearTimeout(camNoteTimer);
+  camNoteTimer = setTimeout(() => n.classList.remove('show'), 2500);
+}
 function stopCamLive() {
+  stopCamWatch();
   if (camHls) { try { camHls.destroy(); } catch (e) {} camHls = null; }
   const v = $('cam-video');
   v.pause(); v.removeAttribute('src'); v.load();
@@ -952,7 +1022,7 @@ function toggleCamLive() {
     toast(status === 401 ? 'The camera refused the login. Log out and in again.' :
           status === -1 ? "This browser can't play the live camera." : CAM_ERR, true);
   }, true);                                        // low-latency mode for the camera
-  if (camLive) playSafe(v);
+  if (camLive) { playSafe(v); startCamWatch(); }
   updateLiveDelay();
 }
 
@@ -2060,6 +2130,18 @@ const PIC_SIZES = [
 ];
 const PIC_TURNS = [0, 90, 180, 270];
 let PIC = null, picBusy = false;                // PIC: the Pi's setting (null = a Pi without it)
+function setTurnWay(way) {
+  if (way === turnWay) return;
+  turnWay = way; storageSet('streampi_turn_way', way);
+  applyZoom(); showTurnWay();
+  toast('Sideways live view: way ' + way + (camTurn() ? '.' : '. It shows when the picture is turned 90° or 270°.'));
+}
+function showTurnWay() {
+  document.querySelectorAll('#turn-way button').forEach(b => b.classList.toggle('active', b.dataset.way === turnWay));
+  const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+  $('turn-way-count').textContent = 'Since this page was opened: ' + plural(camFixes.skips, 'pick-up') + ', ' +
+    plural(camFixes.restarts, 'restart') + ' of a stopped picture.';
+}
 function camTurn() { return PIC && (PIC.turn === 90 || PIC.turn === 270) ? PIC.turn : 0; }
 function validPicture(p) {
   return p && PIC_SIZES.some(z => z[0] === p.width && z[1] === p.height) && PIC_TURNS.indexOf(p.turn) >= 0
@@ -2086,7 +2168,9 @@ function showPicture() {
     $('pic-size-btn').onclick = () => openPicSizes(!box.classList.contains('open'));
     document.querySelectorAll('#pic-turn button').forEach(b => { b.onclick = () => changePicture({ turn: +b.dataset.turn }); });
     $('pic-mirror').addEventListener('change', e => changePicture({ mirror: e.target.checked }));
+    document.querySelectorAll('#turn-way button').forEach(b => { b.onclick = () => setTurnWay(b.dataset.way); });
   }
+  showTurnWay();
   box.querySelectorAll('.pic-opt').forEach(b => {
     b.classList.toggle('active', +b.dataset.w === PIC.width && +b.dataset.h === PIC.height); b.disabled = picBusy;
   });
